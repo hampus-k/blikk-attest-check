@@ -2,11 +2,19 @@
 """blikk-attest-check
 
 Logs in to the Blikk REST API (https://publicapidocs.blikk.com) and checks
-the attestation ("attest") flags of the current month's time reports for one
-or more users. Meant to be called as a step in an automation flow (Power
-Automate, a scheduled task, Google Apps Script shelling out to it, ...): it
-prints a machine-readable JSON summary to stdout and signals the result via
-its exit code.
+the attestation ("attest") flags of the current month's time reports for a
+single Blikk user - the person who owns the configured API credentials.
+Meant to be called as a step in an automation flow (Power Automate, a
+scheduled task, Google Apps Script shelling out to it, ...): it prints a
+machine-readable JSON summary to stdout and signals the result via its exit
+code.
+
+Blikk's public API authenticates an *application* (an id/secret pair), not a
+person - there is no "who am I" endpoint to derive a user from the token. So
+this script requires a Blikk user id up front (BLIKK_USER_ID / --user-id)
+and only ever queries that one user's time reports; it refuses to run
+without it rather than silently falling back to every user the application
+credentials can see.
 
 Pure standard library - no pip install needed, just python3 (3.8+).
 
@@ -113,12 +121,11 @@ def fetch_month_timereports(
     token: str,
     from_date: str,
     to_date: str,
-    user_ids: List[str],
+    user_id: str,
 ) -> List[Dict[str, Any]]:
-    """Fetches every time report in [from_date, to_date] (inclusive,
-    "YYYY-MM-DD"), optionally restricted to user_ids (Blikk user ids, or []
-    for every user the token can see). Paginates internally and retries on
-    HTTP 429, honouring Retry-After.
+    """Fetches every time report for `user_id` in [from_date, to_date]
+    (inclusive, "YYYY-MM-DD"). Paginates internally and retries on HTTP 429,
+    honouring Retry-After.
 
     Returns a flat list of simplified time report dicts.
     """
@@ -138,13 +145,12 @@ def fetch_month_timereports(
             ("pageSize", PAGE_SIZE),
             ("filter.from", from_date),
             ("filter.to", to_date),
+            # filter.userIds is documented as an "integer array"; the public
+            # docs don't show a concrete example, so this uses ASP.NET Web
+            # API's usual convention for array filters (repeat the query
+            # key). A single value works either way this is interpreted.
+            ("filter.userIds", user_id),
         ]
-        # ASP.NET Web API's usual convention for an array filter: the same
-        # query key repeated once per value. The public docs don't show a
-        # concrete example for filter.userIds, so adjust here if your Blikk
-        # tenant expects a different format (e.g. a comma-separated value).
-        for user_id in user_ids:
-            params.append(("filter.userIds", user_id))
 
         url = f"{base_url}/v1/Core/TimeReports?" + urllib.parse.urlencode(params)
 
@@ -354,9 +360,9 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                          help="Blikk API application id (or env BLIKK_APP_ID)")
     parser.add_argument("--app-secret", default=os.environ.get("BLIKK_APP_SECRET"),
                          help="Blikk API application secret (or env BLIKK_APP_SECRET)")
-    parser.add_argument("--user-id", action="append", default=None,
-                         help="Restrict to this Blikk user id. Repeatable. "
-                              "(or env BLIKK_USER_IDS, comma-separated)")
+    parser.add_argument("--user-id", default=os.environ.get("BLIKK_USER_ID"),
+                         help="Your Blikk user id - only this user's time reports are "
+                              "fetched (or env BLIKK_USER_ID). Required.")
     parser.add_argument("--month", default=None, metavar="YYYY-MM",
                          help="Check this month instead of the current one.")
     parser.add_argument("--base-url", default=os.environ.get("BLIKK_BASE_URL") or DEFAULT_BASE_URL,
@@ -364,13 +370,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--format", choices=["json", "text"], default="json",
                          help="Output format. Default: json")
 
-    args = parser.parse_args(argv)
-
-    if args.user_id is None:
-        env_users = os.environ.get("BLIKK_USER_IDS", "")
-        args.user_id = [u.strip() for u in env_users.split(",") if u.strip()] if env_users else []
-
-    return args
+    return parser.parse_args(argv)
 
 
 def main(argv: List[str]) -> int:
@@ -380,6 +380,14 @@ def main(argv: List[str]) -> int:
         print(
             "error: missing Blikk API credentials "
             "(set --app-id/--app-secret or BLIKK_APP_ID/BLIKK_APP_SECRET)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if not args.user_id:
+        print(
+            "error: missing Blikk user id - this tool only ever checks one user's own "
+            "time reports (set --user-id or BLIKK_USER_ID to your Blikk user id)",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -402,6 +410,11 @@ def main(argv: List[str]) -> int:
     try:
         token = authenticate(args.base_url, args.app_id, args.app_secret)
         reports = fetch_month_timereports(args.base_url, token, from_date, to_date, args.user_id)
+        if any(r["userId"] is not None and str(r["userId"]) != str(args.user_id) for r in reports):
+            # Defensive check: the API is expected to already scope this to
+            # filter.userIds, but never surface another user's data if it
+            # somehow didn't.
+            reports = [r for r in reports if str(r["userId"]) == str(args.user_id)]
     except BlikkApiError as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
