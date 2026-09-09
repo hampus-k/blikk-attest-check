@@ -1,12 +1,16 @@
 # blikk-attest-check
 
-Litet CLI-program i C som loggar in mot [Blikks publika REST-API](https://publicapidocs.blikk.com/)
-och kontrollerar attestflaggorna för innevarande månads tidrapporter. Byggt för
-att köras som ett steg i ett automationsflöde (Power Automate/Copilot Studio,
-Google Apps Script + Cloud Scheduler, cron, ...) — det skriver en
+Litet Python-skript som loggar in mot [Blikks publika REST-API](https://publicapidocs.blikk.com/)
+och kontrollerar attestflaggorna för innevarande månads tidrapporter. Byggt
+för att köras som ett steg i ett automationsflöde (Power Automate/Copilot
+Studio, Google Apps Script + Cloud Scheduler, cron, ...) — det skriver en
 maskinläsbar JSON-summering på stdout och signalerar resultatet via sin
 exit-kod, så flödet kan grena på "allt attesterat" / "det finns
 tidrapporter som väntar".
+
+Skriptet är en enda fil (`blikk_attest_check.py`) och använder bara
+Python-standardbiblioteket — inget `pip install`, ingen kompilering. Kör med
+`python3` på Windows, Linux eller macOS.
 
 ## Vad den gör
 
@@ -23,18 +27,9 @@ tidrapporter som väntar".
 4. Summerar totalt och per användare, skriver ut resultatet och avslutar med
    en exit-kod som beskriver läget.
 
-## Bygga
+## Krav
 
-Kräver en C-kompilator och libcurls dev-headers.
-
-```sh
-sudo apt-get install build-essential libcurl4-openssl-dev   # Debian/Ubuntu
-make
-```
-
-Binären hamnar som `./blikk-attest-check`. `third_party/cJSON.{c,h}` är
-[cJSON](https://github.com/DaveGamble/cJSON) (MIT-licens), vendorat i
-repot så att bygget inte behöver hämta något vid kompilering.
+- Python 3.8 eller senare. Inga tredjepartspaket.
 
 ## Konfiguration
 
@@ -61,21 +56,21 @@ export BLIKK_APP_ID=...
 export BLIKK_APP_SECRET=...
 export BLIKK_USER_IDS=1,42          # valfritt: begränsa till specifika användare
 
-./blikk-attest-check                # innevarande månad, JSON på stdout
-./blikk-attest-check --format text  # läsbart format
-./blikk-attest-check --month 2026-08 --user-id 1
+python3 blikk_attest_check.py                # innevarande månad, JSON på stdout
+python3 blikk_attest_check.py --format text  # läsbart format
+python3 blikk_attest_check.py --month 2026-08 --user-id 1
 ```
 
-Fullständig flagglista: `./blikk-attest-check --help`.
+Fullständig flagglista: `python3 blikk_attest_check.py --help`.
 
 ### Exit-koder
 
 | Kod | Betydelse                                                           |
-|-----|----------------------------------------------------------------------|
-| 0   | Anropet lyckades och samtliga tidrapporter i perioden är attesterade |
+|-----|------------------------------------------------------------------------|
+| 0   | Anropet lyckades och samtliga tidrapporter i perioden är attesterade   |
 | 1   | Anropet lyckades, men minst en tidrapport är inte (ännu) attesterad, eller inga tidrapporter alls hittades för perioden |
-| 2   | Fel användning: ogiltiga flaggor eller saknad konfiguration           |
-| 3   | Fel mot Blikk-API:et: inloggning eller förfrågan misslyckades         |
+| 2   | Fel användning: ogiltiga flaggor eller saknad konfiguration            |
+| 3   | Fel mot Blikk-API:et: inloggning eller förfrågan misslyckades          |
 
 Ett automationsflöde kan i regel bara bry sig om `0` (allt klart) kontra
 `≠0` (kolla vidare), men skillnaden mellan 1/2/3 gör det enkelt att larma
@@ -121,17 +116,17 @@ t.ex. bygga ett Teams-/mejlmeddelande med exakt vilka dagar som saknas.
 
 ## Använda i automationsflöden
 
-Binären är tänkt att köras av en agent som redan finns i flödet:
-
-- **Power Automate (Desktop flow / Copilot Studio)**: kör binären med
-  åtgärden "Kör DOS-kommando" / "Run application" på en maskin med
-  binären installerad, fånga stdout i en variabel, tolka den med
-  "Analysera JSON" och grena på `%ExitCode%` respektive `allAttested`.
-- **Google (Apps Script / Cloud Scheduler)**: paketera binären i en
-  container och kör den som ett schemalagt Cloud Run-jobb, eller kör den
-  på en Compute Engine-instans/valfri VM som Apps Script kan trigga via
-  HTTP; låt jobbet skicka `pendingReports` vidare till t.ex. Gmail/Chat.
-- **Vanlig cron/CI**: kör binären som ett steg, kontrollera exit-koden
+- **Power Automate (Desktop flow / Copilot Studio)**: kör skriptet med
+  åtgärden "Kör DOS-kommando" / "Run application"
+  (`python blikk_attest_check.py --format json`) på en maskin med Python
+  installerat, fånga stdout i en variabel, tolka den med "Analysera JSON"
+  och grena på `%ErrorLevel%` respektive `allAttested`.
+- **Google (Apps Script / Cloud Scheduler)**: kör skriptet på en
+  Compute Engine-instans/VM som Apps Script kan trigga via HTTP eller SSH,
+  eller paketera det i en container och kör som ett schemalagt
+  Cloud Run-jobb; låt jobbet skicka `pendingReports` vidare till t.ex.
+  Gmail/Chat.
+- **Vanlig cron/CI**: kör skriptet som ett steg, kontrollera exit-koden
   direkt i skalet.
 
 ## Källa till API-detaljer
@@ -142,10 +137,10 @@ den publika Blikk API-dokumentationen:
 `filter.userIds` skickas som upprepad query-parameter
 (`filter.userIds=1&filter.userIds=2`), vilket är den vanliga ASP.NET
 Web API-konventionen för array-filter — dokumentationen visar inte ett
-konkret exempel på detta, så justera `append_user_id_filters()` i
-`src/blikk_api.c` om ditt Blikk-konto förväntar sig ett annat format.
+konkret exempel på detta, så justera anropet i `fetch_month_timereports()`
+i `blikk_attest_check.py` om ditt Blikk-konto förväntar sig ett annat
+format.
 
 ## Licens
 
-MIT, se [LICENSE](LICENSE). Innehåller [cJSON](https://github.com/DaveGamble/cJSON)
-(MIT), se [third_party/LICENSE_cJSON.txt](third_party/LICENSE_cJSON.txt).
+MIT, se [LICENSE](LICENSE).

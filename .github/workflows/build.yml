@@ -5,18 +5,20 @@ on:
   pull_request:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libcurl dev headers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-      - name: Build
-        run: make
+      - name: Compile check
+        run: python -m py_compile blikk_attest_check.py
 
       - name: Smoke test (--help)
-        run: ./blikk-attest-check --help
+        run: python blikk_attest_check.py --help
